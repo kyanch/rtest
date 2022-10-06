@@ -1,8 +1,7 @@
-use std::sync::Arc;
-use tokio::sync::broadcast;
 
 mod server;
 mod client;
+pub use server::server;
 
 
 #[derive(Clone, Copy, Debug)]
@@ -59,15 +58,16 @@ impl From<MsgHead> for Vec<u8> {
         vec
     }
 }
-pub async fn handle_ctrl_c(tx: Arc<broadcast::Sender<bool>>) {
+// 阻塞，直至C-^ 信号到来
+pub async fn handle_ctrl_c(){
     info!("Safe exit READY! Waiting for signal C-^ ...");
     match tokio::signal::ctrl_c().await {
         Ok(()) => {
-            info!("Signal C-^ trigger. Waiting for all clients close ...");
-            tx.send(false).unwrap();
+            info!("Signal C-^ trigger.");
         }
         Err(e) => {
             error!("Unable to listen for signal c-^ :{}", e);
+            panic!("Unable to listen for signal c-^ :{}", e)
         }
     }
 }

@@ -1,76 +1,133 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex}, io,
+    io::{self, Error, ErrorKind},
+    sync::Arc,
 };
 
 use tokio::{
-    net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpListener},
-    sync::{broadcast, mpsc},
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+    select,
+    sync::{Mutex, RwLock},
 };
 
-struct Cmd {}
+use crate::network::MsgHead;
+
 pub fn server() {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap()
         .block_on(async {
-            let (kill_tx, kill_rx) = broadcast::channel(10);
-            let kill_tx = Arc::from(kill_tx);
-            super::handle_ctrl_c(kill_tx.clone());
-            tokio::select! {
-                _ = kill_rx.recv() =>debug!("Closing server..."),
-                res = listen(kill_tx.clone()) => res.unwrap(),
+            let server_status = Arc::new(ServerStatus::new());
+            select! {
+                _ = super::handle_ctrl_c() =>{
+                    server_status.set_stop_signal().await
+                },
+                res = listen(server_status.clone())=>{
+                    res.unwrap();
+                }
             }
         });
 }
-async fn listen(kill_tx: Arc<broadcast::Sender<bool>>)-> io::Result<()> {
+struct ServerStatus {
+    stop_signal: RwLock<bool>,
+    conn_map: RwLock<HashMap<String, Arc<Mutex<TcpStream>>>>,
+}
+impl ServerStatus {
+    pub fn new() -> Self {
+        trace!("Server status build!");
+        Self {
+            stop_signal: RwLock::new(false),
+            conn_map: RwLock::new(HashMap::new()),
+        }
+    }
+    pub async fn is_continue(&self) -> bool {
+        // equal to `return  !self.stop_signal`
+        return *(self.stop_signal.read().await) != true;
+    }
+    pub async fn set_stop_signal(&self) {
+        // equal to ` self.stop_signal = true`
+        let mut x = self.stop_signal.write().await;
+        *x = true;
+    }
+    pub async fn client_connect(
+        &self,
+        mut socket: TcpStream,
+    ) -> io::Result<(String, Arc<Mutex<TcpStream>>)> {
+        // 获取用户名长度
+        let mut len = socket.read_u32().await? as usize;
+        // 获取用户名
+        let mut username = Vec::with_capacity(len);
+        username.resize(len, 0);
+        len = socket.read_exact(&mut username).await?;
+        let username = String::from_utf8(username).unwrap();
+        // 获取map的写锁
+        let mut map = self.conn_map.write().await;
+        match map.get(&username) {
+            Some(_) => {
+                // 已有用户名 拒绝连接
+                socket.write_u8(2).await?;
+                Err(Error::new(
+                    ErrorKind::Other,
+                    format!("Username : \"{}\" has existed!", username),
+                ))
+            }
+            None => {
+                let socket = Arc::new(Mutex::new(socket));
+                // 无用户名 保存到map中,并返回用户名
+                map.insert(username.clone(), socket.clone());
+                Ok((username, socket.clone()))
+            }
+        }
+    }
+    pub async fn remove_client(&self, name: &String) {
+        let mut map = self.conn_map.write().await;
+        let _ = map.remove(name);
+    }
+}
+
+async fn listen(server_status: Arc<ServerStatus>) -> io::Result<()> {
     let listen_ip = "0.0.0.0:9900";
     let listener = TcpListener::bind(listen_ip).await?;
-    info!("Listen on {}",listen_ip);
+    info!("Listen on {}", listen_ip);
 
-    let map = Arc::new(Mutex::new(HashMap::new()));
-
-    // 发送数据相关的channel
-    let (sender_msg_tx,sender_msg_rx) = mpsc::channel(200);
-
-    // 
-    tokio::spawn(handle_sender_msg(kill_tx.subscribe(),map.clone(),sender_msg_rx));
     loop {
         match listener.accept().await {
-            Ok((mut socket, _addr)) => {
-                let s = server_status.client_connect(socket).await;
-            }
+            Ok((socket, _addr)) => match server_status.client_connect(socket).await {
+                Ok((name, socket)) => {
+                    let server_status = server_status.clone();
+                    tokio::spawn(async move {
+                        let _ =handle_client(&name, socket, server_status.clone()).await;
+                        // 后处理
+                        server_status.remove_client(&name).await;
+                        info!("Close client : \"{}\".", name);
+                    });
+                }
+                Err(e) => {
+                    debug!("{}", e.to_string());
+                }
+            },
             Err(e) => {
-                debug!("Connection establish failed: {}",e.to_string());
+                debug!("Connection establish failed: {}", e.to_string());
                 continue;
             }
         }
     }
     Ok(())
 }
-// 处理接收信号
-fn handle_client_recv(
-    kill_rx: broadcast::Receiver<bool>,
-    client_reader: OwnedReadHalf,
-    msg_sender: mpsc::Sender<Cmd>,
-) {
-}
-
-// 处理发送数据
-async fn handle_sender_msg(
-    // 接收终止信号
-    kill_rx: broadcast::Receiver<bool>,
-    // clients的map
-    clients_map: Arc<Mutex<HashMap<String, OwnedWriteHalf>>>,
-    //接收server内部消息
-    msg_receiver: mpsc::Receiver<Cmd>,
-) {
-}
-
-fn server_handle(
-    kill_rx: broadcast::Receiver<bool>,
-    msg_receiver: mpsc::Receiver<Cmd>,
-    msg_sender: mpsc::Sender<Cmd>,
-) {
+async fn handle_client(
+    _name: &String,
+    socket: Arc<Mutex<TcpStream>>,
+    server_status: Arc<ServerStatus>,
+) -> io::Result<()> {
+    let mut head_buf = [0; MsgHead::SIZE]; // This is Copy
+    while server_status.is_continue().await {
+        let mut socket = socket.lock().await;
+        socket.read_exact(& mut head_buf).await?;
+        let _head = MsgHead::from(head_buf);
+        socket.read_exact(& mut head_buf).await?;
+        todo!()
+    }
+    Ok(())
 }
