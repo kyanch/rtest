@@ -1,3 +1,14 @@
+mod network;
+
+#[macro_use]
+extern crate log;
+
 fn main() {
-    println!("Hello, world!");
+    env_logger::init();
+    // println!("Hello, world!");
+    info!("Start up");
+
+    network::server();
+
+    return;
 }
