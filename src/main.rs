@@ -1,5 +1,7 @@
 mod network;
 
+extern crate serde;
+extern crate rmp_serde as rmps;
 #[macro_use]
 extern crate log;
 

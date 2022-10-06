@@ -7,7 +7,6 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    select,
     sync::{Mutex, RwLock},
 };
 
@@ -20,7 +19,7 @@ pub fn server() {
         .unwrap()
         .block_on(async {
             let server_status = Arc::new(ServerStatus::new());
-            select! {
+            tokio::select! {
                 _ = super::handle_ctrl_c() =>{
                     server_status.set_stop_signal().await
                 },
@@ -98,7 +97,7 @@ async fn listen(server_status: Arc<ServerStatus>) -> io::Result<()> {
                 Ok((name, socket)) => {
                     let server_status = server_status.clone();
                     tokio::spawn(async move {
-                        let _ =handle_client(&name, socket, server_status.clone()).await;
+                        let _ = handle_client(&name, socket, server_status.clone()).await;
                         // 后处理
                         server_status.remove_client(&name).await;
                         info!("Close client : \"{}\".", name);
@@ -121,13 +120,21 @@ async fn handle_client(
     socket: Arc<Mutex<TcpStream>>,
     server_status: Arc<ServerStatus>,
 ) -> io::Result<()> {
-    let mut head_buf = [0; MsgHead::SIZE]; // This is Copy
+    // let mut head_buf = [0; MsgHead::SIZE]; // This is Copy
+    // let mut data_buf = Vec::with_capacity(200);
     while server_status.is_continue().await {
-        let mut socket = socket.lock().await;
-        socket.read_exact(& mut head_buf).await?;
-        let _head = MsgHead::from(head_buf);
-        socket.read_exact(& mut head_buf).await?;
-        todo!()
+        break;
+    //     let mut socket = socket.lock().await;
+    //     socket.read_exact(&mut head_buf).await?;
+    //     let head = MsgHead::from(head_buf);
+    //     match head.r#type {
+    //         super::DataType::Beat => continue,
+    //         super::DataType::Msg => {
+    //             // data_buf.resize(head.len(), 0);
+    //             // socket.read_exact(&mut data_buf).await?;
+    //         }
+    //         super::DataType::Binary => todo!(),
+    //     }
     }
     Ok(())
 }
