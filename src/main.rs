@@ -22,8 +22,5 @@ fn main() {
         2 => client(),
         _ => (),
     }
-
-    network::server();
-
     return;
 }

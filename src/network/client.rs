@@ -1,13 +1,11 @@
 use std::{io, sync::Arc, vec};
 
-use rmp_serde::encode;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader, AsyncBufReadExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{
-        tcp::{self, OwnedReadHalf, OwnedWriteHalf},
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpStream,
     },
-    select,
     sync::broadcast,
 };
 
@@ -32,32 +30,12 @@ pub fn client() {
                 kill_tx.send(false).unwrap();
             });
             let (reader, writer) = socket.into_split();
-            tokio::select! {
-                res = send(a_kill_tx.subscribe(),writer) =>{
-                    match res {
-                        Ok(_) => todo!(),
-                        Err(_) => todo!(),
-                    }
-                },
-                res = receive(a_kill_tx.subscribe(),reader)=>{
-                    match res {
-                        Ok(_) => todo!(),
-                        Err(_) => todo!(),
-                    }
-                },
-            }
-            //启动发送和接收
-            // let s = String::from("Hello world");
-            // let head = MsgHead {
-            //     length: s.len() as u32,
-            //     r#type: crate::network::DataType::Msg,
-            //     to_server: true,
-            //     receiver: Some(vec!["nihao".to_string()]),
-            // };
-            // let head = data::encode(&head).unwrap();
-            // socket.write_u32(head.len() as u32).await.unwrap();
-            // socket.write_all(&head).await.unwrap();
-            // socket.write_all(s.as_bytes()).await.unwrap();
+            let (res1, res2) = tokio::join! {
+                 send(a_kill_tx.subscribe(),writer),
+                 receive(a_kill_tx.subscribe(),reader),
+            };
+            // res1.unwrap();
+            // res2.unwrap();
         });
 }
 
@@ -81,10 +59,19 @@ async fn send(
     mut tcp_sender: OwnedWriteHalf,
 ) -> io::Result<()> {
     let mut buf = String::new();
-    let mut head = MsgHead{ length: 0, r#type: super::DataType::Msg, to_server: true, receiver: Some(vec!["jack".to_string()]) };
-    while kill_rx.try_recv().unwrap_or(true) {
-        let mut stdin_reader = BufReader::new(tokio::io::stdin());
-        stdin_reader.read_line(&mut buf).await?;
+    let mut head = MsgHead {
+        length: 0,
+        r#type: super::DataType::Msg,
+        to_server: true,
+        receiver: Some(vec!["jack".to_string()]),
+    };
+    let mut stdin_reader = BufReader::new(tokio::io::stdin());
+    loop {
+        buf.clear();
+        tokio::select! {
+            _ = kill_rx.recv() => break ,
+            _ = stdin_reader.read_line(&mut buf) =>(),
+        }
         head.length = buf.len() as u32;
         let head = data::encode(&head).unwrap();
         tcp_sender.write_u32(head.len() as u32).await?;
@@ -99,8 +86,13 @@ async fn receive(
 ) -> io::Result<()> {
     let mut len: usize;
     let mut buf = Vec::with_capacity(200);
-    while kill_rx.try_recv().unwrap_or(true) {
-        len = tcp_receiver.read_u32().await? as usize;
+    loop {
+        tokio::select! {
+            _ = kill_rx.recv() => break ,
+            res = tcp_receiver.read_u32() =>{
+                len = res? as usize
+            },
+        }
         buf.resize(len, 0);
         tcp_receiver.read_exact(&mut buf).await?;
         let head: MsgHead = data::decode(&buf).unwrap();

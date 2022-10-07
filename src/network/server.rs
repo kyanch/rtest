@@ -1,18 +1,16 @@
 use std::{
-    borrow::Cow,
     collections::HashMap,
     io::{self, Error, ErrorKind},
-    os::linux::fs::MetadataExt,
     sync::Arc,
 };
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}},
     sync::{mpsc, Mutex, RwLock},
 };
 
-use super::{client, data, DataType, MsgHead};
+use super::{data, DataType, MsgHead};
 
 #[test]
 fn test(){
@@ -46,7 +44,7 @@ pub fn server() {
 }
 struct ServerStatus {
     stop_signal: RwLock<bool>,
-    conn_map: RwLock<HashMap<String, Arc<Mutex<TcpStream>>>>,
+    conn_map: RwLock<HashMap<String, Arc<Mutex<OwnedWriteHalf>>>>,
     sender: mpsc::Sender<Cmd>,
 }
 impl ServerStatus {
@@ -74,7 +72,7 @@ impl ServerStatus {
     pub async fn client_connect(
         &self,
         mut socket: TcpStream,
-    ) -> io::Result<(String, Arc<Mutex<TcpStream>>)> {
+    ) -> io::Result<(String, OwnedReadHalf)> {
         // 获取用户名长度
         let mut len = socket.read_u32().await? as usize;
         // 获取用户名
@@ -94,10 +92,11 @@ impl ServerStatus {
                 ))
             }
             None => {
-                let socket = Arc::new(Mutex::new(socket));
+                let (read,write) = socket.into_split();
+                let socket = Arc::new(Mutex::new(write));
                 // 无用户名 保存到map中,并返回用户名
                 map.insert(username.clone(), socket.clone());
-                Ok((username, socket.clone()))
+                Ok((username, read))
             }
         }
     }
@@ -115,11 +114,11 @@ async fn listen(server_status: Arc<ServerStatus>) -> io::Result<()> {
     loop {
         match listener.accept().await {
             Ok((socket, _addr)) => match server_status.client_connect(socket).await {
-                Ok((name, socket)) => {
+                Ok((name, tcp_reader)) => {
                     let server_status = server_status.clone();
                     tokio::spawn(async move {
                         trace!("New client : \"{}\".", name);
-                        let _ = handle_client(&name, socket, server_status.clone()).await;
+                        let _ = handle_client(&name, tcp_reader, server_status.clone()).await;
                         // 后处理
                         server_status.remove_client(&name).await;
                         trace!("Close client : \"{}\".", name);
@@ -139,19 +138,17 @@ async fn listen(server_status: Arc<ServerStatus>) -> io::Result<()> {
 }
 async fn handle_client(
     _name: &String,
-    socket: Arc<Mutex<TcpStream>>,
+    mut tcp_reader:OwnedReadHalf,
     server_status: Arc<ServerStatus>,
 ) -> io::Result<()> {
     let mut len: usize;
     let mut buf = Vec::with_capacity(200);
     let sender_to_server = server_status.sender.clone();
     while server_status.is_continue().await {
-        // get lock
-        let mut socket = socket.lock().await;
         // read head
-        len = socket.read_u32().await? as usize;
+        len = tcp_reader.read_u32().await? as usize;
         buf.resize(len, 0);
-        socket.read_exact(&mut buf).await?;
+        tcp_reader.read_exact(&mut buf).await?;
         let head: MsgHead = data::decode(&buf).unwrap();
         // parse head
         match head.r#type {
@@ -159,9 +156,7 @@ async fn handle_client(
             super::DataType::Msg => {
                 // 获取 消息
                 buf.resize(head.len(), 0);
-                socket.read_exact(&mut buf).await?;
-                // 数据获取完毕，立即释放锁
-                drop(socket);
+                tcp_reader.read_exact(&mut buf).await?;
                 // 消息入堆
                 let message = Arc::new(String::from_utf8(buf.clone()).unwrap());
                 // 发送给服务器
