@@ -26,6 +26,7 @@ enum Cmd {
 }
 
 pub fn server() {
+    info!("Start up Server");
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

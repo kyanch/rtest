@@ -3,6 +3,7 @@ mod server;
 mod data;
 
 pub use server::server;
+pub use client::client;
 pub use data::{DataType,MsgHead};
 
 // 阻塞，直至C-^ 信号到来

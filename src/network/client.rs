@@ -13,6 +13,7 @@ use tokio::{
 
 use crate::network::{data, handle_ctrl_c, MsgHead};
 pub fn client() {
+    info!("Start up Client");
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
