@@ -12,12 +12,17 @@ use tokio::{
     sync::{mpsc, Mutex, RwLock},
 };
 
-use super::{data, MsgHead};
+use super::{client, data, DataType, MsgHead};
+
+#[test]
+fn test(){
+    server();
+}
 
 #[derive(Debug, Clone)]
 enum Cmd {
-    Msg(String),
-    Binary(Vec<u8>),
+    Msg(Arc<String>),
+    Binary(Arc<Vec<u8>>),
 }
 
 pub fn server() {
@@ -151,13 +156,52 @@ async fn handle_client(
         match head.r#type {
             super::DataType::Beat => continue,
             super::DataType::Msg => {
+                // 获取 消息
                 buf.resize(head.len(), 0);
                 socket.read_exact(&mut buf).await?;
+                // 数据获取完毕，立即释放锁
+                drop(socket);
+                // 消息入堆
+                let message = Arc::new(String::from_utf8(buf.clone()).unwrap());
+                // 发送给服务器
                 if head.to_server {
-                    sender_to_server
-                        .send(Cmd::Msg(String::from_utf8(buf.clone()).unwrap()))
-                        .await
-                        .unwrap();
+                    let sender_to_server = sender_to_server.clone();
+                    let message = message.clone();
+                    tokio::spawn(async move {
+                        sender_to_server.send(Cmd::Msg(message)).await.unwrap();
+                    });
+                }
+                // 发送给其它客户端
+                if let Some(clients) = &head.receiver {
+                    // 准备发送数据
+                    let message = message.clone();
+                    let head = MsgHead {
+                        length: message.len() as u32,
+                        r#type: DataType::Msg,
+                        to_server: true,
+                        receiver: None,
+                    };
+                    let head = Arc::new(data::encode(&head).unwrap());
+                    let map = server_status.conn_map.read().await;
+                    for client_name in clients {
+                        match map.get(client_name) {
+                            Some(client_socket) => {
+                                let name = client_socket.clone();
+                                // 准备发送数据
+                                let message = message.clone();
+                                let head = head.clone();
+                                // 启动发送协程
+                                tokio::spawn(async move {
+                                    // 获取锁
+                                    let mut sender = name.lock().await;
+                                    sender.write_u32(head.len() as u32).await.unwrap();
+                                    sender.write_all(&head).await.unwrap();
+                                    sender.write_all(message.as_bytes()).await.unwrap();
+                                });
+                            }
+                            None => info!("Client \"{}\" NOT FOUND in conn_map!", client_name),
+                        }
+                    }
                 }
             }
             super::DataType::Binary => todo!(),
