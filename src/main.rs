@@ -1,3 +1,6 @@
+use std::io::{self, Write};
+
 fn main() {
-    println!("Hello, world!");
+    let mut stdout = io::stdout().lock();
+    stdout.write(b"Hello world").unwrap();
 }
