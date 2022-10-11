@@ -1,29 +1,25 @@
 mod app;
 
-use std::{io, thread, time::Duration};
+use std::io;
 
 use app::App;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
-    execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use tui::{
-    backend::{self, Backend, CrosstermBackend},
-    layout::Layout,
-    style::Style,
-    widgets::{Block, Borders},
-    Frame, Terminal,
+    backend::{Backend, CrosstermBackend}, Terminal,
 };
 
 fn main() -> Result<(), io::Error> {
-    let app = App::new();
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    let app = App::with_area(terminal.size().unwrap());
     app.run(&mut terminal)?;
 
     disable_raw_mode()?;
