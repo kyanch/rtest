@@ -1,4 +1,5 @@
 mod app;
+mod dynamic_list;
 use std::io::{self, Stdout};
 
 use crossterm::{
@@ -40,6 +41,7 @@ pub struct DynamicBlock {
     style: Style,
     title: String,
 }
+#[allow(unused)]
 impl DynamicBlock {
     pub fn with_area(rect: Rect) -> Self {
         Self {
